@@ -1,0 +1,702 @@
+{
+  "name": "ESIC · Validación documental de admisiones",
+  "meta": {
+    "descripcion": "Orquesta el ciclo completo: carga -> antivirus -> validación -> decisión -> humano en el bucle -> escritura en el sistema académico -> seguimiento.",
+    "version": "3.2.0",
+    "nota_arquitectura": "n8n gobierna el FLUJO y la visibilidad para el negocio. La lógica de validación vive en Azure Functions (código probado), no en nodos visuales. Ver ADR-03.",
+    "variables_de_entorno": [
+      "WEBHOOK_SECRET",
+      "AV_SCAN_ENDPOINT",
+      "FUNC_VALIDADOR",
+      "MODO_SOMBRA",
+      "SIA_API",
+      "TEAMS_WEBHOOK_REVISION",
+      "PORTAL",
+      "APPINSIGHTS_ENDPOINT",
+      "TEAMS_EQUIPO_SEGURIDAD",
+      "TEAMS_CANAL_SEGURIDAD",
+      "TEAMS_EQUIPO_ADMISIONES",
+      "TEAMS_CANAL_COORDINACION"
+    ],
+    "requisitos_n8n": "N8N_BLOCK_ENV_ACCESS_IN_NODE=false y NODE_FUNCTION_ALLOW_BUILTIN=crypto. Las credenciales (Header Auth, Azure, Outlook, Teams, Postgres) se asignan al importar."
+  },
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Webhook · documento cargado",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admisiones/documento-cargado",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "notes": "El portal envía: solicitud_id, programa_tipo, email_aspirante, archivos[{nombre, blob_uri}], url_carga."
+    },
+    {
+      "id": "2",
+      "name": "Validar firma HMAC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Rechaza cualquier llamada que no venga del portal de admisiones.\n// Requiere NODE_FUNCTION_ALLOW_BUILTIN=crypto en el contenedor de n8n.\nconst crypto = require('crypto');\nconst item = $input.first();\nconst firma = String(item.json.headers['x-esic-signature'] || '');\n// La firma se calcula sobre el cuerpo CRUDO (opción rawBody del webhook),\n// no sobre un JSON re-serializado, que cambia espacios y orden de claves.\nconst crudo = item.binary && item.binary.data\n  ? Buffer.from(item.binary.data.data, 'base64')\n  : Buffer.from(JSON.stringify(item.json.body));\nconst esperada = crypto.createHmac('sha256', $env.WEBHOOK_SECRET).update(crudo).digest('hex');\nconst a = Buffer.from(firma, 'utf8');\nconst b = Buffer.from(esperada, 'utf8');\n// timingSafeEqual lanza si las longitudes difieren: se valida antes.\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {\n  throw new Error('Firma inválida');\n}\nreturn $input.all();"
+      }
+    },
+    {
+      "id": "3",
+      "name": "Descargar de Blob (cifrado CMK)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Webhook · documento cargado').first().json.body.archivos[0].blob_uri }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ms-version",
+              "value": "2023-11-03"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "notes": "OAuth2 (client credentials) contra Entra ID con alcance https://storage.azure.com/.default; la aplicación tiene el rol Storage Blob Data Reader.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "4",
+      "name": "Antivirus (Defender)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AV_SCAN_ENDPOINT }}",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "5",
+      "name": "¿Archivo limpio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.limpio }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "6",
+      "name": "Function · validar solicitud",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FUNC_VALIDADOR }}/api/validar-solicitud",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ solicitud_id: $('Webhook · documento cargado').first().json.body.solicitud_id, archivos: $('Webhook · documento cargado').first().json.body.archivos, programa_tipo: $('Webhook · documento cargado').first().json.body.programa_tipo, url_carga: $('Webhook · documento cargado').first().json.body.url_carga }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "notes": "Llama a ValidadorDocumental.validar(). Toda la lógica crítica vive aquí, en código versionado y con pruebas unitarias. La Function descarga los archivos con identidad administrada.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "7",
+      "name": "Enrutar por decisión",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "mode": "rules",
+        "dataType": "string",
+        "value1": "={{ $json.decision }}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "equal",
+              "value2": "auto_aprobado",
+              "output": 0
+            },
+            {
+              "operation": "equal",
+              "value2": "revision_humana",
+              "output": 1
+            },
+            {
+              "operation": "equal",
+              "value2": "devolver",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      }
+    },
+    {
+      "id": "8",
+      "name": "¿Modo sombra activo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $env.MODO_SOMBRA === 'true' }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "notes": "Fase 2, semanas 18-20: el sistema decide y el humano también; se comparan. No se automatiza nada hasta 95% de acuerdo (GO/NO-GO 3)."
+    },
+    {
+      "id": "9",
+      "name": "Escribir en sistema académico (SIA)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SIA_API }}/solicitudes/{{ $('Function · validar solicitud').first().json.solicitud_id }}/documentos/aprobar",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campos_extraidos: $('Function · validar solicitud').first().json.documentos, score: $('Function · validar solicitud').first().json.score, actor: $json.revisor || 'fabrica-ia', version_validador: $('Function · validar solicitud').first().json.trazabilidad.version_validador, idempotency_key: $('Function · validar solicitud').first().json.solicitud_id + '-' + $('Function · validar solicitud').first().json.trazabilidad.huella_documentos }) }}"
+      },
+      "notes": "Idempotente: la llave depende de la solicitud y de la huella de los documentos, no de la hora de evaluación.",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "10",
+      "name": "Notificar aspirante · aprobado",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        40
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $('Webhook · documento cargado').first().json.body.email_aspirante }}",
+        "subject": "Tu documentación fue verificada · ESIC Medellín",
+        "bodyContent": "Hola. Revisamos tu documentación y está completa. El equipo de admisiones te contactará para el siguiente paso.",
+        "additionalFields": {}
+      }
+    },
+    {
+      "id": "11",
+      "name": "Tarjeta adaptable en Teams · revisión",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TEAMS_WEBHOOK_REVISION }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: { type: 'AdaptiveCard', version: '1.4', body: [{ type: 'TextBlock', text: 'Revisión requerida · Solicitud ' + $json.solicitud_id, weight: 'Bolder', size: 'Large' }, { type: 'TextBlock', text: 'Score de riesgo: ' + $json.score + '/100 · decisión sugerida: ' + $json.decision, color: $json.score < 65 ? 'Attention' : 'Warning' }, { type: 'FactSet', facts: $json.hallazgos.filter(h => h.severidad !== 'info').map(h => ({ title: h.codigo, value: h.mensaje + (h.documento ? ' (' + h.documento + ')' : '') })) } ], actions: [{ type: 'Action.OpenUrl', title: 'Aprobar', url: $execution.resumeUrl + '?accion=aprobar' }, { type: 'Action.OpenUrl', title: 'Devolver al aspirante', url: $execution.resumeUrl + '?accion=devolver' }, { type: 'Action.OpenUrl', title: 'Ver documentos', url: $env.PORTAL + '/revision/' + $json.solicitud_id } ] } }] }) }}"
+      },
+      "notes": "Flujo de Teams 'publicar en un canal cuando se recibe una solicitud de webhook'. Los botones llevan la URL de reanudación de esta ejecución. El revisor recibe los hallazgos ya señalados: no abre el PDF completo, revisa lo dudoso."
+    },
+    {
+      "id": "12",
+      "name": "Esperar decisión humana",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        220
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "GET",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 48,
+        "resumeUnit": "hours",
+        "options": {}
+      }
+    },
+    {
+      "id": "13",
+      "name": "Registrar decisión + señal de reentrenamiento",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        220
+      ],
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "auditoria_validacion_documental",
+        "columns": "solicitud_id,decision_ia,score,decision_humana,version_validador",
+        "additionalFields": {}
+      },
+      "notes": "Cada corrección humana es dato de entrenamiento. Aquí se cierra el bucle de mejora del modelo custom."
+    },
+    {
+      "id": "14",
+      "name": "Correo de corrección al aspirante",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        400
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $('Webhook · documento cargado').first().json.body.email_aspirante }}",
+        "subject": "Necesitamos que revises un documento · ESIC Medellín",
+        "bodyContent": "={{ $('Function · validar solicitud').first().json.mensaje_aspirante || 'Hola. Un asesor de admisiones revisó tu documentación y te escribirá con los ajustes necesarios.' }}",
+        "additionalFields": {}
+      },
+      "notes": "Usa el texto redactado por el LLM a partir de hallazgos corregibles: describe qué corregir, nunca insinúa fraude."
+    },
+    {
+      "id": "15",
+      "name": "Esperar 72 h la nueva carga",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        400
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 72,
+        "unit": "hours"
+      },
+      "notes": "Si el aspirante carga de nuevo, el webhook inicia otra ejecución y esta se cancela desde el portal."
+    },
+    {
+      "id": "16",
+      "name": "Cuarentena + alerta a seguridad",
+      "type": "n8n-nodes-base.microsoftTeams",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        440
+      ],
+      "parameters": {
+        "resource": "channelMessage",
+        "operation": "create",
+        "teamId": "={{ $env.TEAMS_EQUIPO_SEGURIDAD }}",
+        "channelId": "={{ $env.TEAMS_CANAL_SEGURIDAD }}",
+        "contentType": "text",
+        "message": "=Archivo bloqueado por antivirus en la solicitud {{ $('Webhook · documento cargado').first().json.body.solicitud_id }}. Quedó en cuarentena."
+      }
+    },
+    {
+      "id": "17",
+      "name": "Telemetría a App Insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APPINSIGHTS_ENDPOINT }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ evento: 'validacion_documental', solicitud: $('Function · validar solicitud').first().json.solicitud_id, score: $('Function · validar solicitud').first().json.score, decision: $('Function · validar solicitud').first().json.decision, ms: $('Function · validar solicitud').first().json.trazabilidad.duracion_ms, paginas: $('Function · validar solicitud').first().json.trazabilidad.paginas_procesadas, costo_di_usd: $('Function · validar solicitud').first().json.trazabilidad.costo_di_usd }) }}"
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "18",
+      "name": "¿Qué decidió el revisor?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        220
+      ],
+      "parameters": {
+        "mode": "rules",
+        "dataType": "string",
+        "value1": "={{ $('Esperar decisión humana').first().json.query?.accion || 'sin_respuesta' }}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "equal",
+              "value2": "aprobar",
+              "output": 0
+            },
+            {
+              "operation": "equal",
+              "value2": "devolver",
+              "output": 1
+            },
+            {
+              "operation": "equal",
+              "value2": "sin_respuesta",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 2
+      }
+    },
+    {
+      "id": "19",
+      "name": "Enviar recordatorio al aspirante",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        400
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $('Webhook · documento cargado').first().json.body.email_aspirante }}",
+        "subject": "Recordatorio: tu documentación está pendiente · ESIC Medellín",
+        "bodyContent": "={{ 'Hola. Aún no recibimos los documentos corregidos. Puedes cargarlos aquí: ' + $('Webhook · documento cargado').first().json.body.url_carga }}",
+        "additionalFields": {}
+      }
+    },
+    {
+      "id": "20",
+      "name": "Escalar a coordinación (48 h sin decisión)",
+      "type": "n8n-nodes-base.microsoftTeams",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        300
+      ],
+      "parameters": {
+        "resource": "channelMessage",
+        "operation": "create",
+        "teamId": "={{ $env.TEAMS_EQUIPO_ADMISIONES }}",
+        "channelId": "={{ $env.TEAMS_CANAL_COORDINACION }}",
+        "contentType": "text",
+        "message": "=La solicitud {{ $('Function · validar solicitud').first().json.solicitud_id }} lleva 48 h sin decisión humana."
+      }
+    }
+  ],
+  "connections": {
+    "Webhook · documento cargado": {
+      "main": [
+        [
+          {
+            "node": "Validar firma HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar firma HMAC": {
+      "main": [
+        [
+          {
+            "node": "Descargar de Blob (cifrado CMK)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar de Blob (cifrado CMK)": {
+      "main": [
+        [
+          {
+            "node": "Antivirus (Defender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Antivirus (Defender)": {
+      "main": [
+        [
+          {
+            "node": "¿Archivo limpio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Archivo limpio?": {
+      "main": [
+        [
+          {
+            "node": "Function · validar solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cuarentena + alerta a seguridad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function · validar solicitud": {
+      "main": [
+        [
+          {
+            "node": "Enrutar por decisión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrutar por decisión": {
+      "main": [
+        [
+          {
+            "node": "¿Modo sombra activo?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tarjeta adaptable en Teams · revisión",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Correo de corrección al aspirante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Modo sombra activo?": {
+      "main": [
+        [
+          {
+            "node": "Tarjeta adaptable en Teams · revisión",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escribir en sistema académico (SIA)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escribir en sistema académico (SIA)": {
+      "main": [
+        [
+          {
+            "node": "Notificar aspirante · aprobado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar aspirante · aprobado": {
+      "main": [
+        [
+          {
+            "node": "Telemetría a App Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tarjeta adaptable en Teams · revisión": {
+      "main": [
+        [
+          {
+            "node": "Esperar decisión humana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar decisión humana": {
+      "main": [
+        [
+          {
+            "node": "Registrar decisión + señal de reentrenamiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar decisión + señal de reentrenamiento": {
+      "main": [
+        [
+          {
+            "node": "¿Qué decidió el revisor?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Qué decidió el revisor?": {
+      "main": [
+        [
+          {
+            "node": "Escribir en sistema académico (SIA)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Correo de corrección al aspirante",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalar a coordinación (48 h sin decisión)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Correo de corrección al aspirante": {
+      "main": [
+        [
+          {
+            "node": "Esperar 72 h la nueva carga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar 72 h la nueva carga": {
+      "main": [
+        [
+          {
+            "node": "Enviar recordatorio al aspirante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar recordatorio al aspirante": {
+      "main": [
+        [
+          {
+            "node": "Telemetría a App Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalar a coordinación (48 h sin decisión)": {
+      "main": [
+        [
+          {
+            "node": "Telemetría a App Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "errorWorkflow": "ESIC · Manejo central de errores"
+  },
+  "pinData": {}
+}
