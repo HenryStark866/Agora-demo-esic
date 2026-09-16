@@ -1,0 +1,21 @@
+# Paquete comprimido y notas internas
+*.zip
+CORREO_DE_ENTREGA.txt
+REGISTRO_DE_CAMBIOS.md
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+# Variables de entorno (claves)
+.env
+.env.*
+# Vercel
+.vercel
+
+# Copias que genera la app de Claude
+Claude outputs/
+PARA_SUBIR_A_GITHUB/
