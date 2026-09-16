@@ -1,0 +1,119 @@
+========================================================================================
+ MODELO DE IMPACTO Y ROI - FABRICA DE IA Y AUTOMATIZACION | ESIC MEDELLIN
+========================================================================================
+ TRM $3.150 COP/USD | SMMLV 2026 $1.750.905 | factor prestacional 1,52
+ Costo/hora: analista $51.845 | coordinador $86.408
+
+----------------------------------------------------------------------------------------
+1. LINEA BASE Y REDUCCION DE TRABAJO MANUAL
+----------------------------------------------------------------------------------------
+Flujo                                                           h base    defl  h ahorro
+E1  Consultas repetitivas (estudiantes, egresados, empresas)    11.667    72 %     8.400
+E1  Seguimiento y reapertura de consultas sin resolver           1.925    65 %     1.251
+E2  Revision manual de documentos (2 h / 20 solicitudes)           180    80 %       144
+E2  Ciclos de correo por documentos incompletos o ilegibles        315    75 %       236
+E3  Asesoria manual de eleccion de programa                        900    55 %       495
+ADM Reportes recurrentes (6 reportes x 12 meses)                   288    85 %       245
+ADM Conciliacion manual de datos entre sistemas                    188    80 %       150
+TOTAL                                                           15.462  70,6 %    10.921
+
+  Carga manual actual ............   15.462 h/anio   (8,4 FTE)
+  Carga liberada .................   10.921 h/anio   (5,9 FTE)
+  >> REDUCCION DE TRABAJO MANUAL: 70,6 %   (meta del caso: 70 %)
+  Costo anual de la carga base ... $811.589.946 COP
+  Valor de la capacidad liberada . $574.675.672 COP/anio
+
+----------------------------------------------------------------------------------------
+2. RUN RATE ANUAL DE LA PLATAFORMA
+----------------------------------------------------------------------------------------
+  Azure OpenAI (Foundry) - inferencia                USD 1.116      $3.514.219 COP
+  Azure OpenAI - embeddings y reindexacion             USD 420      $1.323.000 COP
+  Azure AI Search (S1, 1 SU) [estimado]              USD 3.000      $9.450.000 COP
+  Azure AI Document Intelligence                       USD 198        $623.700 COP
+  Azure Container Apps (n8n + APIs)                  USD 1.450      $4.567.500 COP
+  Azure Functions, Storage, Key Vault, Monitor         USD 980      $3.087.000 COP
+  Content Safety + evaluaciones continuas              USD 620      $1.953.000 COP
+  WhatsApp Business API                              USD 2.400      $7.560.000 COP
+  TOTAL                                             USD 10.184     $32.078.419 COP
+
+  Interacciones atendidas por IA/anio: 74.375 | paginas Document Intelligence/anio: 12.600
+  Costo marginal por consulta atendida por IA : $431 COP
+  Costo de esa misma consulta atendida a mano  : $6.913 COP
+  >> Relacion: 1 a 16
+
+----------------------------------------------------------------------------------------
+3. INVERSION ANO 1
+----------------------------------------------------------------------------------------
+  Director de Fabrica de IA                             $287.428.565 COP  ya aprobado/interno
+  Ingeniero de IA / Backend (nuevo, mes 2)              $190.288.355 COP  INCREMENTAL
+  Ingeniero de Automatizacion (nuevo, mes 4)            $131.738.092 COP  INCREMENTAL
+  Knowledge Ops / curador de contenido (interno)         $55.888.888 COP  ya aprobado/interno
+  Product Owner de negocio (interno)                     $47.904.761 COP  ya aprobado/interno
+  Otros (pentest, licencias, formacion, contingencia)     $42.000.000 COP  INCREMENTAL
+
+  Vista A - costo INCREMENTAL ano 1 (equipo nuevo + otros + run rate) : $396.104.866 COP
+  Vista B - costo TOTALMENTE CARGADO ano 1 (incluye direccion e internos): $787.327.080 COP
+  Nota: el Director de Fabrica de IA es una contratacion que ESIC ya decidio
+        (este proceso de seleccion). En la Vista A no se carga al proyecto.
+
+----------------------------------------------------------------------------------------
+4. ROI - EFICIENCIA OPERATIVA
+----------------------------------------------------------------------------------------
+                       Beneficio               Costo                Neto       ROI
+  A ano 1           $280.154.390        $396.104.866       -$115.950.476   -29,3 %
+  B ano 1           $280.154.390        $787.327.080       -$507.172.689   -64,4 %
+  ano 2             $574.675.672        $415.316.505        $159.359.167    38,4 %
+  ano 3             $574.675.672        $415.316.505        $159.359.167    38,4 %
+
+  Payback (Vista A, solo eficiencia): mes 21
+  ROI acumulado 3 anos (Vista A): 16,5 %   [beneficio $1.429.505.735 / costo $1.226.737.877]
+
+----------------------------------------------------------------------------------------
+5. PALANCA DE INGRESO - donde esta el verdadero caso de negocio
+----------------------------------------------------------------------------------------
+  Leads/anio 9.000 | conversion actual 13,3 % | lift objetivo +1,5 pp
+  Matriculas incrementales/anio: 135
+
+    Ticket anual   Ingreso increm.   Margen contrib.  ROI ano 2  Matric. que pagan
+                                                          total        el run rate
+     $14.000.000    $1.890.000.000      $850.500.000      243 %                5,1
+     $22.000.000    $2.970.000.000    $1.336.500.000      360 %                3,2
+     $30.000.000    $4.050.000.000    $1.822.500.000      477 %                2,4
+
+  El run rate anual de la plataforma ($32.078.419) se paga con 2,4 a 5,1
+  matriculas incrementales; el costo completo del ano 2 ($415.316.505), con 31 a 66.
+  El ticket promedio lo fija ESIC: el modelo entrega la palanca, no una cifra inventada.
+
+----------------------------------------------------------------------------------------
+6. SENSIBILIDAD - que pasa si la deflexion no llega al 70%
+----------------------------------------------------------------------------------------
+     Deflexion          Ahorro anual     ROI ano 2 (solo eficiencia)
+          40 %          $324.635.978                         -21,8 %
+          50 %          $405.794.973                          -2,3 %
+          60 %          $486.953.967                          17,2 %
+          70 %          $568.112.962                          36,8 %
+          80 %          $649.271.956                          56,3 %
+
+  Punto de equilibrio en eficiencia pura: deflexion minima del 51,2 % para ROI positivo en ano 2.
+  Con 40 % de deflexion, el faltante se cubre con 14 matriculas incrementales (ticket mas bajo).
+
+----------------------------------------------------------------------------------------
+7. SENSIBILIDAD AL VOLUMEN - el supuesto mas fragil de todo el modelo
+----------------------------------------------------------------------------------------
+  'Cientos de consultas diarias' es una magnitud, no un dato. Si el volumen
+  real de ESIC Medellin es menor, el ahorro cae proporcionalmente (el costo de
+  inferencia tambien baja, pero es una fraccion minima del costo).
+
+    Consultas/dia    Carga base (h)        Ahorro anual    ROI ano 2           Veredicto
+              100             5.754        $217.269.347      -47,4 %     NO se paga solo
+              150             7.696        $288.750.612      -30,1 %     NO se paga solo
+              200             9.637        $360.231.877      -12,9 %     NO se paga solo
+              250            11.579        $431.713.142        4,2 %            marginal
+              350            15.462        $574.675.672       38,4 %        se paga solo  <-- modelado
+              500            21.287        $789.119.467       89,3 %        se paga solo
+
+  Punto de equilibrio: 238 consultas diarias.
+  Lectura honesta: por debajo de ~240 consultas diarias el proyecto NO se
+  justifica solo por eficiencia y debe sostenerse en la palanca de conversion
+  de la seccion 5. Medir esto es la primera actividad de la Fase 0.
+========================================================================================
