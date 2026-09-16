@@ -19,3 +19,6 @@ desktop.ini
 # Copias que genera la app de Claude
 Claude outputs/
 PARA_SUBIR_A_GITHUB/
+
+.vercel
+.env*
